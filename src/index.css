@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-brand-primary: #f1f5f9; /* slate-200 */
+  --color-brand-accent: #6366f1; /* indigo-500 */
+  --color-surface-950: #050714;
+}
+
+@layer base {
+  body {
+    @apply bg-surface-950 text-brand-primary font-sans antialiased mesh-gradient min-h-screen;
+  }
+}
+
+@utility mesh-gradient {
+  background-color: #050714;
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(79, 70, 229, 0.15) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(192, 38, 211, 0.1) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(30, 27, 75, 1) 0px, transparent 80%);
+}
+
+@utility glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+@utility glass-input {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+@utility glow-indigo {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+}
+
+.progress-gradient {
+  background: linear-gradient(90deg, #6366f1 0%, #a855f7 100%);
+}

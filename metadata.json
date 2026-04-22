@@ -1,0 +1,6 @@
+{
+  "name": "AspectAI: Image Escalator 4:5",
+  "description": "Batch upscale and transform 1:1 images to 4:5 social-ready portraits using smart algorithms.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
