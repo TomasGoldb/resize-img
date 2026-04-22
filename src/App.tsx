@@ -26,7 +26,7 @@ import { GoogleGenAI } from "@google/genai";
 // Types
 type ProcessingStatus = 'idle' | 'processing' | 'completed' | 'error';
 type ImageFormat = 'image/jpeg' | 'image/png' | 'image/webp';
-type UpscaleMethod = 'generative-fill' | 'ai-blur' | 'solid-edge';
+type UpscaleMethod = 'generative-fill' | 'hugging-face' | 'ai-blur' | 'solid-edge';
 
 interface ProcessedImage {
   id: string;
@@ -61,6 +61,7 @@ export default function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const hfToken = (import.meta as any).env.VITE_HF_API_TOKEN;
 
   // Handle folder upload
   const handleFolderUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -157,6 +158,10 @@ export default function App() {
     if (config.upscaleMethod === 'generative-fill') {
       return processGenerativeFill(file, config);
     }
+    
+    if (config.upscaleMethod === 'hugging-face') {
+      return processHuggingFace(file, config);
+    }
 
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -206,6 +211,48 @@ export default function App() {
       img.onerror = () => reject("Error al cargar imagen");
       img.src = URL.createObjectURL(file);
     });
+  };
+
+  const processHuggingFace = async (file: File, config: SettingsConfig): Promise<string> => {
+    if (!hfToken) {
+      setErrorMsg("Se requiere VITE_HF_API_TOKEN de Hugging Face para este método.");
+      return processBlurFallback(file, config);
+    }
+
+    try {
+      // Model FLUX or SDXL are great choices for realism
+      const MODEL_ID = "black-forest-labs/FLUX.1-schnell";
+      const blob = await file.arrayBuffer();
+
+      const response = await fetch(
+        `https://api-inference.huggingface.co/models/${MODEL_ID}`,
+        {
+          headers: { Authorization: `Bearer ${hfToken}` },
+          method: "POST",
+          body: blob,
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Hugging Face API error");
+      }
+
+      const resultBlob = await response.blob();
+      const reader = new FileReader();
+      return new Promise((resolve) => {
+        reader.onloadend = async () => {
+          const rawBase64 = reader.result as string;
+          // Apply our 4:5 transformation logic
+          resolve(await forceResizeTo45(rawBase64, config));
+        };
+        reader.readAsDataURL(resultBlob);
+      });
+    } catch (error: any) {
+      console.error("Error en Hugging Face:", error);
+      setErrorMsg(`Error en Hugging Face: ${error.message || "Fallo en la inferencia"}`);
+      return processBlurFallback(file, config);
+    }
   };
 
   const fileToBase64 = (file: File): Promise<string> => {
@@ -541,7 +588,8 @@ export default function App() {
                   value={settings.upscaleMethod}
                   onChange={(e) => setSettings({...settings, upscaleMethod: e.target.value as any})}
                 >
-                  <option className="bg-surface-950" value="generative-fill">Relleno Generativo Neuronal</option>
+                  <option className="bg-surface-950" value="generative-fill">Relleno Generativo Neuronal (Gemini)</option>
+                  <option className="bg-surface-950" value="hugging-face">Experimental (Hugging Face)</option>
                   <option className="bg-surface-950" value="ai-blur">Desenfoque Generativo</option>
                   <option className="bg-surface-950" value="solid-edge">Margen Sólido</option>
                 </select>
