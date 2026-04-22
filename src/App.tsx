@@ -233,18 +233,22 @@ export default function App() {
               }
             },
             {
-              text: `Extiende esta imagen verticalmente a una relación de aspecto 4:5. 
-              La imagen de origen es un cuadrado 1:1. Rellena las áreas superior e inferior con contenido generado por IA 
-              que extienda la escena de forma fluida. El resultado final debe ser exactamente una relación de aspecto 4:5.
-              Mantén la imagen cuadrada original en el centro. 
-              Formato de salida: ${config.format}`
+              text: `Esta es una fotografía profesional de formato cuadrado 1:1 que requiere expansión vertical (outpainting). 
+              Tu tarea es extender esta imagen verticalmente para alcanzar una relación de aspecto 4:5 exacta.
+              INSTRUCCIONES CRÍTICAS:
+              1. Extiende la escena, el fondo, la iluminación y las texturas de forma fotorrealista hacia arriba y hacia abajo.
+              2. La imagen original debe quedar perfectamente centrada y sin ninguna alteración en sus píxeles originales.
+              3. Está estrictamente PROHIBIDO usar desenfoque (blur), degradados, márgenes sólidos o marcos.
+              4. Los nuevos píxeles generados deben ser una continuación lógica y coherente de la escena (suelo, paredes, cielo, objetos, etc.).
+              5. El resultado debe parecer una única fotografía capturada en formato vertical 4:5 nativo.
+              Formato de salida requerido: ${config.format}`
             }
           ]
         }],
         config: {
-          // @ts-ignore - Setting aspect ratio in config for image models
+          // @ts-ignore - Configuración para calidad estable
           imageConfig: {
-            aspectRatio: "3:4", // Closest standard vertical ratio, though we prompt for 4:5
+            aspectRatio: "3:4"
           }
         }
       });
@@ -260,8 +264,15 @@ export default function App() {
       
       console.warn("Gemini no devolvió una imagen, usando desenfoque como respaldo");
       return processBlurFallback(file, config);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error en relleno generativo:", error);
+      
+      // Check for quota error
+      const errorStr = JSON.stringify(error);
+      if (errorStr.includes("RESOURCE_EXHAUSTED") || errorStr.includes("quota")) {
+        setErrorMsg("Límite de cuota IA alcanzado. Por favor, espera a que se reinicie tu cuota o usa menos imágenes por lote.");
+      }
+      
       return processBlurFallback(file, config);
     }
   };
@@ -409,6 +420,18 @@ export default function App() {
         {/* Left Column: Processing Studio */}
         <div className="col-span-12 lg:col-span-8 flex flex-col gap-6">
           <div className="flex-1 glass rounded-3xl border border-white/10 flex flex-col items-center justify-center p-12 relative overflow-hidden">
+            {errorMsg && (
+              <motion.div 
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-6 p-4 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center gap-3 text-red-200 text-xs"
+              >
+                <AlertCircle size={16} />
+                <p>{errorMsg}</p>
+                <button onClick={() => setErrorMsg(null)} className="ml-auto underline opacity-50 hover:opacity-100">Cerrar</button>
+              </motion.div>
+            )}
+            
             <AnimatePresence mode="wait">
               {files.length === 0 ? (
                 <motion.div
