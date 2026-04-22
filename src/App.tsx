@@ -90,7 +90,7 @@ export default function App() {
   const generateBatchInsight = async (fileCount: number) => {
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3-flash-preview", 
         contents: `I am processing a batch of ${fileCount} images to convert them from 1:1 to 4:5 aspect ratio. 
          Give me a very short (10 words max), technical-sounding optimization status in Spanish, like "Detección de bordes optimizada para texturas de alta frecuencia".`,
       });
@@ -121,8 +121,11 @@ export default function App() {
     for (let i = 0; i < total; i++) {
       const current = results[i];
       try {
-        // AI Simulation/Enhancement: We'll wait a bit to simulate processing
-        // and actually perform the canvas manipulation
+        // Delay to respect Rate Limits (RPM) - essential for image generation
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+
         const processedUrl = await processImage(files[i], settings);
         
         results[i] = {
