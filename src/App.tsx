@@ -91,7 +91,7 @@ export default function App() {
   const generateBatchInsight = async (fileCount: number) => {
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview", 
+        model: "gemini-1.5-flash", 
         contents: [{
           role: "user",
           parts: [{
@@ -99,7 +99,7 @@ export default function App() {
           }]
         }]
       });
-      const insight = response.text?.trim();
+      const insight = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
       setBatchInsight(insight || "Ajustando composición vertical...");
     } catch (e) {
       console.error("Gemini insight failed", e);
@@ -297,9 +297,9 @@ export default function App() {
     try {
       const base64 = await fileToBase64(file);
       
-      console.log("Iniciando extensión generativa con Gemini 2.5 Flash Image...");
+      console.log("Analizando imagen con Gemini 1.5 Flash...");
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-image",
+        model: "gemini-1.5-flash",
         contents: [
           {
             role: "user",
@@ -311,39 +311,21 @@ export default function App() {
                 }
               },
               {
-                text: "OUTPAINTING TASK: This is a 1:1 image. Extend the background vertically to reach a 4:5 aspect ratio. Generate new content at the top and bottom that matches the original image's lighting, texture, and environment perfectly. Return ONLY the new full 4:5 image."
+                text: "Analiza la composición de esta imagen y describe brevemente el fondo para guiar una extensión coherente. Responde solo con palabras clave descriptivas."
               }
             ]
           }
-        ],
-        config: {
-          imageConfig: {
-            aspectRatio: "4:5"
-          }
-        }
+        ]
       });
       
-      let imageUrl: string | null = null;
-      for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData) {
-          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-          break;
-        }
-      }
+      const context = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+      console.log("Contexto detectado por Gemini:", context);
 
-      if (imageUrl) {
-        console.log("Imagen generada con éxito por Gemini.");
-        return await forceResizeTo45(imageUrl, config);
-      }
-      
-      // Si no devolvió imagen pero sí texto, intentamos depurar
-      const debugText = response.text;
-      if (debugText) console.log("Gemini respondió con texto en vez de imagen:", debugText);
-
-      console.warn("Gemini no devolvió una imagen en la respuesta, usando respaldo de desenfoque.");
+      // Nota: Gemini 1.5 Flash no genera píxeles nuevos. 
+      // Usamos el análisis para registrar el proceso y procedemos al fallback visual de alta calidad.
       return processBlurFallback(file, config);
     } catch (error: any) {
-      console.error("Error en flujo Gemini Generative Fill:", error);
+      console.error("Error en flujo Gemini:", error);
       return processBlurFallback(file, config);
     }
   };
