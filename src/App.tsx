@@ -95,13 +95,12 @@ export default function App() {
         contents: [{
           role: "user",
           parts: [{
-            text: `I am processing a batch of ${fileCount} images to convert them from 1:1 to 4:5 aspect ratio. 
-            Give me a very short (10 words max), technical-sounding optimization status in Spanish, like "Detección de bordes optimizada para texturas de alta frecuencia".`
+            text: `Dame un estado técnico muy corto (máximo 10 palabras) en español sobre el procesamiento de ${fileCount} imágenes para Instagram, tipo "Optimizando coherencia cromática para el canvas vertical".`
           }]
         }]
       });
       const insight = response.text?.trim();
-      setBatchInsight(insight || "Analizando composición y texturas...");
+      setBatchInsight(insight || "Ajustando composición vertical...");
     } catch (e) {
       console.error("Gemini insight failed", e);
       setBatchInsight("Optimizando flujo de trabajo neuronal...");
@@ -298,7 +297,7 @@ export default function App() {
     try {
       const base64 = await fileToBase64(file);
       
-      console.log("Extendiendo fondo con Gemini 2.5 Flash Image...");
+      console.log("Iniciando extensión generativa con Gemini 2.5 Flash Image...");
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-image",
         contents: [
@@ -312,7 +311,7 @@ export default function App() {
                 }
               },
               {
-                text: "OUTPAINTING TASK: This is a square 1:1 image. Extend the background vertically to reach a 4:5 aspect ratio. Generate new content at the top and bottom that matches the original image's lighting, texture, and environment perfectly. Return the new full 4:5 image."
+                text: "OUTPAINTING TASK: This is a 1:1 image. Extend the background vertically to reach a 4:5 aspect ratio. Generate new content at the top and bottom that matches the original image's lighting, texture, and environment perfectly. Return ONLY the new full 4:5 image."
               }
             ]
           }
@@ -333,13 +332,18 @@ export default function App() {
       }
 
       if (imageUrl) {
+        console.log("Imagen generada con éxito por Gemini.");
         return await forceResizeTo45(imageUrl, config);
       }
       
-      console.warn("Gemini no devolvió una imagen en la respuesta, usando respaldo.");
+      // Si no devolvió imagen pero sí texto, intentamos depurar
+      const debugText = response.text;
+      if (debugText) console.log("Gemini respondió con texto en vez de imagen:", debugText);
+
+      console.warn("Gemini no devolvió una imagen en la respuesta, usando respaldo de desenfoque.");
       return processBlurFallback(file, config);
     } catch (error: any) {
-      console.error("Error en flujo Gemini Solo:", error);
+      console.error("Error en flujo Gemini Generative Fill:", error);
       return processBlurFallback(file, config);
     }
   };
