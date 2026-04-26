@@ -91,13 +91,15 @@ export default function App() {
   const generateBatchInsight = async (fileCount: number) => {
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview", 
+        model: "gemini-3-flash-preview", // Correct stable model for text
         contents: `I am processing a batch of ${fileCount} images to convert them from 1:1 to 4:5 aspect ratio. 
          Give me a very short (10 words max), technical-sounding optimization status in Spanish, like "Detección de bordes optimizada para texturas de alta frecuencia".`,
       });
-      setBatchInsight(response.text?.trim() || null);
+      setBatchInsight(response.text?.trim() || "Analizando composición y texturas...");
     } catch (e) {
       console.error("Gemini insight failed", e);
+      // Fallback message so the UI doesn't look broken
+      setBatchInsight("Optimizando flujo de trabajo neuronal...");
     }
   };
 
@@ -220,22 +222,59 @@ export default function App() {
     }
 
     try {
-      // Model FLUX or SDXL are great choices for realism
-      const MODEL_ID = "black-forest-labs/FLUX.1-schnell";
+      // Use SD 2 Inpainting which is very reliable for filling missing areas
+      const MODEL_ID = "stabilityai/stable-diffusion-2-inpainting"; 
+      const TASK = "image-to-image";
+      const PROMPT = "Extending the background of the photograph seamlessly, high resolution, professional";
       const blob = await file.arrayBuffer();
 
-      const response = await fetch(
-        `https://api-inference.huggingface.co/models/${MODEL_ID}`,
-        {
-          headers: { Authorization: `Bearer ${hfToken}` },
-          method: "POST",
-          body: blob,
-        }
-      );
+      let attempts = 0;
+      let response;
+      
+      // Retry logic for cold starts (HF returns 503 while model is loading)
+      while (attempts < 3) {
+        try {
+          // Use local server proxy to avoid CORS
+          response = await fetch(
+            `/api/hf-proxy`,
+            {
+              headers: { 
+                "x-hf-token": hfToken.trim(),
+                "x-model-id": MODEL_ID,
+                "x-hf-task": TASK,
+                "x-hf-prompt": PROMPT,
+                "Content-Type": "application/octet-stream"
+              },
+              method: "POST",
+              body: blob,
+            }
+          );
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Hugging Face API error");
+          if (response.status === 503 || response.status === 429) {
+            // Model is loading or rate limited, wait and retry
+            attempts++;
+            await new Promise(r => setTimeout(r, 5000));
+            continue;
+          }
+          break;
+        } catch (fetchErr) {
+          attempts++;
+          if (attempts >= 3) throw fetchErr;
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+
+      if (!response || !response.ok) {
+        let errorMessage = `Error de Red HF (${response?.status || '?'})`;
+        try {
+          const errorData = await response?.json();
+          errorMessage = errorData?.error || errorMessage;
+        } catch (e) {
+          // If not JSON, try text
+          const textError = await response?.text().catch(() => "");
+          if (textError) errorMessage = textError.slice(0, 100);
+        }
+        throw new Error(errorMessage);
       }
 
       const resultBlob = await response.blob();
@@ -271,10 +310,9 @@ export default function App() {
     try {
       const base64 = await fileToBase64(file);
       
-      const result = await ai.models.generateContent({
+      const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-image",
-        contents: [{
-          role: "user",
+        contents: {
           parts: [
             {
               inlineData: {
@@ -283,33 +321,26 @@ export default function App() {
               }
             },
             {
-              text: `Esta es una fotografía profesional de formato cuadrado 1:1 que requiere expansión vertical (outpainting). 
-              Tu tarea es extender esta imagen verticalmente para alcanzar una relación de aspecto 4:5 exacta.
-              INSTRUCCIONES CRÍTICAS:
-              1. Extiende la escena, el fondo, la iluminación y las texturas de forma fotorrealista hacia arriba y hacia abajo.
-              2. La imagen original debe quedar perfectamente centrada y sin ninguna alteración en sus píxeles originales.
-              3. Está estrictamente PROHIBIDO usar desenfoque (blur), degradados, márgenes sólidos o marcos.
-              4. Los nuevos píxeles generados deben ser una continuación lógica y coherente de la escena (suelo, paredes, cielo, objetos, etc.).
-              5. El resultado debe parecer una única fotografía capturada en formato vertical 4:5 nativo.
-              Formato de salida requerido: ${config.format}`
+              text: "Extend this 1:1 image background vertically into a 4:5 aspect ratio. Generate new content at the top and bottom that continues the scene perfectly. Maintain stylistic consistency, lighting, and textures. Return the full image as data."
             }
           ]
-        }],
-        config: {
-          // @ts-ignore - Configuración para calidad estable
-          imageConfig: {
-            aspectRatio: "3:4"
-          }
-        }
+        },
       });
 
-      const candidate = result.candidates?.[0];
-      const part = candidate?.content?.parts?.find(p => p.inlineData);
-      
-      if (part?.inlineData?.data) {
-        const rawBase64 = `data:${config.format};base64,${part.inlineData.data}`;
+      let imageUrl: string | null = null;
+
+      if (response.candidates?.[0]?.content?.parts) {
+        for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData) {
+            imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+            break;
+          }
+        }
+      }
+
+      if (imageUrl) {
         // Force resize to exact 4:5 to ensure the ZIP isn't square
-        return await forceResizeTo45(rawBase64, config);
+        return await forceResizeTo45(imageUrl, config);
       }
       
       console.warn("Gemini no devolvió una imagen, usando desenfoque como respaldo");
@@ -317,10 +348,10 @@ export default function App() {
     } catch (error: any) {
       console.error("Error en relleno generativo:", error);
       
-      // Check for quota error
-      const errorStr = JSON.stringify(error);
-      if (errorStr.includes("RESOURCE_EXHAUSTED") || errorStr.includes("quota")) {
-        setErrorMsg("Límite de cuota IA alcanzado. Por favor, espera a que se reinicie tu cuota o usa menos imágenes por lote.");
+      // Check for quota error or specific Gemini errors
+      const errorMsg = error.message || JSON.stringify(error);
+      if (errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("quota")) {
+        setErrorMsg("Límite de cuota IA alcanzado. Por favor, usa menos imágenes o espera unos minutos.");
       }
       
       return processBlurFallback(file, config);
