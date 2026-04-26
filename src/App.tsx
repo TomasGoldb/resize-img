@@ -91,7 +91,7 @@ export default function App() {
   const generateBatchInsight = async (fileCount: number) => {
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash", 
+        model: "gemini-1.5-flash-latest", 
         contents: [{
           role: "user",
           parts: [{
@@ -128,9 +128,10 @@ export default function App() {
     for (let i = 0; i < total; i++) {
       const current = results[i];
       try {
-        // Delay to respect Rate Limits (RPM) - essential for image generation
+        // Al usar Gemini 1.5 Flash, el costo es extremadamente bajo (~$0.075 / 1M tokens)
+        // Delay to respect Rate Limits
         if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
         const processedUrl = await processImage(files[i], settings);
@@ -176,10 +177,6 @@ export default function App() {
         const ctx = canvas.getContext('2d', { alpha: config.format === 'image/png' });
         if (!ctx) return reject("Error de Canvas");
 
-        // Calculate target dimensions
-        // Let's assume user wants high-res 4:5
-        // If source is 1000x1000, target 4:5 width is 1000, target height is 1250 (1000 / 0.8)
-        // Then we apply the scale factor
         const targetWidth = img.width * config.scaleFactor;
         const targetHeight = targetWidth / ASPECT_RATIO;
 
@@ -188,23 +185,18 @@ export default function App() {
 
         // Background
         if (config.upscaleMethod === 'ai-blur') {
-          // Draw blurred background
           ctx.filter = 'blur(40px) brightness(0.6)';
-          // Stretch image to fill background
           ctx.drawImage(img, -targetWidth * 0.1, -targetHeight * 0.1, targetWidth * 1.2, targetHeight * 1.2);
           ctx.filter = 'none';
         } else if (config.upscaleMethod === 'solid-edge') {
-          // Use edge color (simplistic average)
           ctx.fillStyle = '#111'; 
           ctx.fillRect(0, 0, targetWidth, targetHeight);
         }
 
-        // Draw original centered image
         const drawWidth = targetWidth;
         const drawHeight = img.height * (targetWidth / img.width);
         const yOffset = (targetHeight - drawHeight) / 2;
         
-        // Add subtle shadow for depth if in blur mode
         if (config.upscaleMethod === 'ai-blur') {
           ctx.shadowColor = 'rgba(0,0,0,0.5)';
           ctx.shadowBlur = 40;
@@ -220,26 +212,25 @@ export default function App() {
   };
 
   const processHuggingFace = async (file: File, config: SettingsConfig): Promise<string> => {
-    const hfToken = (import.meta as any).env.VITE_HF_API_TOKEN;
-    if (!hfToken) {
-      setErrorMsg("Se requiere VITE_HF_API_TOKEN de Hugging Face para este método.");
+    const hfTokenLocal = (import.meta as any).env.VITE_HF_API_TOKEN;
+    if (!hfTokenLocal) {
+      setErrorMsg("Se requiere VITE_HF_API_TOKEN en Configuración para este método.");
       return processBlurFallback(file, config);
     }
 
     try {
-      // Use SDXL for higher quality background extension
       const MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"; 
-      const PROMPT = "Professional high-quality studio photography, expand background seamlessly, cinematic lighting, ultra-detailed, matching textures of the central object";
+      const PROMPT = "Extended photography background, matching lighting and textures, cinematic setting, high resolution, seamless extension, outdoors workout environment or studio as appropriate";
       const blob = await file.arrayBuffer();
 
       let attempts = 0;
       let response;
       
-      while (attempts < 3) {
+      while (attempts < 2) {
         try {
           response = await fetch(`/api/hf-proxy`, {
             headers: { 
-              "x-hf-token": hfToken.trim(),
+              "x-hf-token": hfTokenLocal.trim(),
               "x-model-id": MODEL_ID,
               "x-hf-prompt": PROMPT,
               "Content-Type": "application/octet-stream"
@@ -250,19 +241,20 @@ export default function App() {
 
           if (response.status === 503 || response.status === 429) {
             attempts++;
-            await new Promise(r => setTimeout(r, 7000));
+            await new Promise(r => setTimeout(r, 6000));
             continue;
           }
           break;
         } catch (fetchErr) {
           attempts++;
-          if (attempts >= 3) throw fetchErr;
+          if (attempts >= 2) throw fetchErr;
           await new Promise(r => setTimeout(r, 2000));
         }
       }
 
       if (!response || !response.ok) {
-        throw new Error(`HF Error: ${response?.statusText || 'Inferencia fallida'}`);
+        const errTxt = await response?.text();
+        throw new Error(errTxt || "Error en Hugging Face");
       }
 
       const resultBlob = await response.blob();
@@ -276,7 +268,6 @@ export default function App() {
       });
     } catch (error: any) {
       console.error("Error en Hugging Face:", error);
-      setErrorMsg(`Error en Hugging Face: ${error.message || "Fallo"}`);
       return processBlurFallback(file, config);
     }
   };
@@ -295,37 +286,68 @@ export default function App() {
 
   const processGenerativeFill = async (file: File, config: SettingsConfig): Promise<string> => {
     try {
-      const base64 = await fileToBase64(file);
+      const base64Image = await fileToBase64(file);
       
-      console.log("Analizando imagen con Gemini 1.5 Flash...");
+      console.log("Gemini 1.5 Flash analizando contexto visual...");
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-1.5-flash-latest",
         contents: [
           {
             role: "user",
             parts: [
               {
                 inlineData: {
-                  data: base64,
+                  data: base64Image,
                   mimeType: file.type
                 }
               },
               {
-                text: "Analiza la composición de esta imagen y describe brevemente el fondo para guiar una extensión coherente. Responde solo con palabras clave descriptivas."
+                text: "Analiza detalladamente esta imagen. Describe el entorno, la iluminación, los materiales y el fondo. Tu respuesta será usada como prompt para extender la imagen (outpainting). Responde con una sola frase descriptiva y técnica en inglés."
               }
             ]
           }
         ]
       });
       
-      const context = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
-      console.log("Contexto detectado por Gemini:", context);
+      const visualDescription = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "cinematic background extension";
+      console.log("Contexto obtenido de Gemini:", visualDescription);
 
-      // Nota: Gemini 1.5 Flash no genera píxeles nuevos. 
-      // Usamos el análisis para registrar el proceso y procedemos al fallback visual de alta calidad.
+      const hfTokenLocal = (import.meta as any).env.VITE_HF_API_TOKEN;
+      if (!hfTokenLocal) {
+        console.warn("Falta VITE_HF_API_TOKEN para relleno generativo, usando desenfoque.");
+        return processBlurFallback(file, config);
+      }
+
+      console.log("Llamando a SDXL para relleno generativo...");
+      const hfResponse = await fetch("/api/hf-proxy", {
+        headers: { 
+          "x-hf-token": hfTokenLocal.trim(),
+          "x-model-id": "stabilityai/stable-diffusion-xl-base-1.0",
+          "x-hf-prompt": `Professional outpainting, perfectly matching the central object. ${visualDescription}. Seamless transition, ultra-detailed textures, matching lighting, 8k resolution`,
+          "Content-Type": "application/octet-stream"
+        },
+        method: "POST",
+        body: await file.arrayBuffer()
+      });
+
+      if (hfResponse.ok) {
+        const resultBlob = await hfResponse.blob();
+        const reader = new FileReader();
+        return new Promise((resolve) => {
+          reader.onloadend = async () => {
+            const rawBase64 = reader.result as string;
+            resolve(await forceResizeTo45(rawBase64, config));
+          };
+          reader.readAsDataURL(resultBlob);
+        });
+      } else {
+        const err = await hfResponse.text();
+        console.warn("SDXL falló o está cargando, usando desenfoque como respaldo técnico:", err);
+      }
+      
       return processBlurFallback(file, config);
     } catch (error: any) {
-      console.error("Error en flujo Gemini:", error);
+      console.error("Error en flujo IA Híbrida:", error);
       return processBlurFallback(file, config);
     }
   };
