@@ -14,14 +14,15 @@ async function startServer() {
 
   // Hugging Face Proxy with per-route body parsing
   app.post("/api/hf-proxy", express.raw({ type: "*/*", limit: "50mb" }), async (req, res) => {
-    console.log(`[HF Proxy] Request received for model: ${req.headers['x-model-id']}`);
-    
-    const hfToken = req.headers['x-hf-token'] as string;
-    const modelId = (req.headers['x-model-id'] as string) || "black-forest-labs/FLUX.1-schnell";
+    const hfToken = (req.headers['x-hf-token'] as string) || process.env.VITE_HF_API_TOKEN;
+    const modelId = (req.headers['x-model-id'] as string) || "runwayml/stable-diffusion-v1-5";
+    const prompt = (req.headers['x-hf-prompt'] as string) || "Professional high-resolution photograph, highly detailed, extending background";
 
+    console.log(`[HF Proxy] Request for model: ${modelId}`);
+    
     if (!hfToken) {
       console.error("[HF Proxy] Missing HF Token");
-      return res.status(400).json({ error: "Missing VITE_HF_API_TOKEN" });
+      return res.status(401).json({ error: "Missing Hugging Face API Token. Please configure VITE_HF_API_TOKEN in your settings." });
     }
 
     const hf = new HfInference(hfToken);
@@ -30,54 +31,52 @@ async function startServer() {
       const bodyBuffer = Buffer.isBuffer(req.body) ? (req.body as Buffer) : Buffer.alloc(0);
       
       if (bodyBuffer.length === 0) {
-        console.error("[HF Proxy] Empty body");
         return res.status(400).json({ error: "No image data provided" });
       }
 
-      console.log(`[HF Proxy] Using SDK to call HF API for ${modelId} (${bodyBuffer.length} bytes)`);
+      console.log(`[HF Proxy] Calling SDK for ${modelId} (${bodyBuffer.length} bytes)`);
       
-      const task = (req.headers['x-hf-task'] as string) || "image-to-image";
-      const prompt = (req.headers['x-hf-prompt'] as string) || "Professional photograph, high quality, detailed";
-      const provider = req.headers['x-hf-provider'] as string;
-
       let result;
-      
-      // If it's image-to-image, use the specialized method which is more reliable
-      if (task === "image-to-image") {
-        console.log(`[HF Proxy] Specialized imageToImage call with prompt: "${prompt}"`);
+      // Stable Diffusion 3.5 Large might be better handled via generic request depending on the endpoint configuration
+      // but imageToImage is the standard for extension tasks.
+      try {
         result = await hf.imageToImage({
           model: modelId,
           inputs: new Blob([bodyBuffer]),
           parameters: {
             prompt: prompt,
+            // @ts-ignore
+            negative_prompt: "blurry, low quality, distorted, bad anatomy, borders, frames",
+            strength: 0.8,
           },
-          // @ts-ignore
-          provider: provider || undefined,
         });
-      } else {
-        // Fallback to generic request
+      } catch (e: any) {
+        console.log("[HF Proxy] imageToImage failed, attempting generic request...");
         result = await hf.request({
           model: modelId,
           data: bodyBuffer,
           method: "POST",
-          // @ts-ignore
-          task: task,
-          // @ts-ignore
-          provider: provider || undefined,
+          headers: {
+            "x-wait-for-model": "true"
+          }
         });
       }
 
-      // The result from SDK request for image models is typically a Blob or similar
       const resultBuffer = await (result as any).arrayBuffer();
       res.setHeader("Content-Type", "image/jpeg");
       console.log("[HF Proxy] Success, returning image");
       res.send(Buffer.from(resultBuffer));
 
     } catch (error: any) {
-      console.error("[HF Proxy] SDK error:", error.message);
-      // Try to parse the error message if it's JSON
+      console.error("[HF Proxy] Request error:", error.message);
+      
+      // Check for specific HF errors
+      if (error.message.includes("is currently loading")) {
+        return res.status(503).json({ error: "El modelo se está cargando en Hugging Face. Por favor, reintenta en unos segundos." });
+      }
+      
       res.status(error.response?.status || 500).json({ 
-        error: error.message || "Internal server error" 
+        error: error.message || "Error interno al procesar la imagen con IA" 
       });
     }
   });

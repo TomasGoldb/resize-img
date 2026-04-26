@@ -91,14 +91,19 @@ export default function App() {
   const generateBatchInsight = async (fileCount: number) => {
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview", // Correct stable model for text
-        contents: `I am processing a batch of ${fileCount} images to convert them from 1:1 to 4:5 aspect ratio. 
-         Give me a very short (10 words max), technical-sounding optimization status in Spanish, like "Detección de bordes optimizada para texturas de alta frecuencia".`,
+        model: "gemini-3-flash-preview", 
+        contents: [{
+          role: "user",
+          parts: [{
+            text: `I am processing a batch of ${fileCount} images to convert them from 1:1 to 4:5 aspect ratio. 
+            Give me a very short (10 words max), technical-sounding optimization status in Spanish, like "Detección de bordes optimizada para texturas de alta frecuencia".`
+          }]
+        }]
       });
-      setBatchInsight(response.text?.trim() || "Analizando composición y texturas...");
+      const insight = response.text?.trim();
+      setBatchInsight(insight || "Analizando composición y texturas...");
     } catch (e) {
       console.error("Gemini insight failed", e);
-      // Fallback message so the UI doesn't look broken
       setBatchInsight("Optimizando flujo de trabajo neuronal...");
     }
   };
@@ -216,44 +221,37 @@ export default function App() {
   };
 
   const processHuggingFace = async (file: File, config: SettingsConfig): Promise<string> => {
+    const hfToken = (import.meta as any).env.VITE_HF_API_TOKEN;
     if (!hfToken) {
       setErrorMsg("Se requiere VITE_HF_API_TOKEN de Hugging Face para este método.");
       return processBlurFallback(file, config);
     }
 
     try {
-      // Use SD 2 Inpainting which is very reliable for filling missing areas
-      const MODEL_ID = "stabilityai/stable-diffusion-2-inpainting"; 
-      const TASK = "image-to-image";
-      const PROMPT = "Extending the background of the photograph seamlessly, high resolution, professional";
+      // Use SDXL for higher quality background extension
+      const MODEL_ID = "stabilityai/stable-diffusion-xl-base-1.0"; 
+      const PROMPT = "Professional high-quality studio photography, expand background seamlessly, cinematic lighting, ultra-detailed, matching textures of the central object";
       const blob = await file.arrayBuffer();
 
       let attempts = 0;
       let response;
       
-      // Retry logic for cold starts (HF returns 503 while model is loading)
       while (attempts < 3) {
         try {
-          // Use local server proxy to avoid CORS
-          response = await fetch(
-            `/api/hf-proxy`,
-            {
-              headers: { 
-                "x-hf-token": hfToken.trim(),
-                "x-model-id": MODEL_ID,
-                "x-hf-task": TASK,
-                "x-hf-prompt": PROMPT,
-                "Content-Type": "application/octet-stream"
-              },
-              method: "POST",
-              body: blob,
-            }
-          );
+          response = await fetch(`/api/hf-proxy`, {
+            headers: { 
+              "x-hf-token": hfToken.trim(),
+              "x-model-id": MODEL_ID,
+              "x-hf-prompt": PROMPT,
+              "Content-Type": "application/octet-stream"
+            },
+            method: "POST",
+            body: blob,
+          });
 
           if (response.status === 503 || response.status === 429) {
-            // Model is loading or rate limited, wait and retry
             attempts++;
-            await new Promise(r => setTimeout(r, 5000));
+            await new Promise(r => setTimeout(r, 7000));
             continue;
           }
           break;
@@ -265,16 +263,7 @@ export default function App() {
       }
 
       if (!response || !response.ok) {
-        let errorMessage = `Error de Red HF (${response?.status || '?'})`;
-        try {
-          const errorData = await response?.json();
-          errorMessage = errorData?.error || errorMessage;
-        } catch (e) {
-          // If not JSON, try text
-          const textError = await response?.text().catch(() => "");
-          if (textError) errorMessage = textError.slice(0, 100);
-        }
-        throw new Error(errorMessage);
+        throw new Error(`HF Error: ${response?.statusText || 'Inferencia fallida'}`);
       }
 
       const resultBlob = await response.blob();
@@ -282,14 +271,13 @@ export default function App() {
       return new Promise((resolve) => {
         reader.onloadend = async () => {
           const rawBase64 = reader.result as string;
-          // Apply our 4:5 transformation logic
           resolve(await forceResizeTo45(rawBase64, config));
         };
         reader.readAsDataURL(resultBlob);
       });
     } catch (error: any) {
       console.error("Error en Hugging Face:", error);
-      setErrorMsg(`Error en Hugging Face: ${error.message || "Fallo en la inferencia"}`);
+      setErrorMsg(`Error en Hugging Face: ${error.message || "Fallo"}`);
       return processBlurFallback(file, config);
     }
   };
@@ -310,50 +298,48 @@ export default function App() {
     try {
       const base64 = await fileToBase64(file);
       
+      console.log("Extendiendo fondo con Gemini 2.5 Flash Image...");
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-image",
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                data: base64,
-                mimeType: file.type
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: {
+                  data: base64,
+                  mimeType: file.type
+                }
+              },
+              {
+                text: "OUTPAINTING TASK: This is a square 1:1 image. Extend the background vertically to reach a 4:5 aspect ratio. Generate new content at the top and bottom that matches the original image's lighting, texture, and environment perfectly. Return the new full 4:5 image."
               }
-            },
-            {
-              text: "Extend this 1:1 image background vertically into a 4:5 aspect ratio. Generate new content at the top and bottom that continues the scene perfectly. Maintain stylistic consistency, lighting, and textures. Return the full image as data."
-            }
-          ]
-        },
-      });
-
-      let imageUrl: string | null = null;
-
-      if (response.candidates?.[0]?.content?.parts) {
-        for (const part of response.candidates[0].content.parts) {
-          if (part.inlineData) {
-            imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-            break;
+            ]
           }
+        ],
+        config: {
+          imageConfig: {
+            aspectRatio: "4:5"
+          }
+        }
+      });
+      
+      let imageUrl: string | null = null;
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+          imageUrl = `data:image/png;base64,${part.inlineData.data}`;
+          break;
         }
       }
 
       if (imageUrl) {
-        // Force resize to exact 4:5 to ensure the ZIP isn't square
         return await forceResizeTo45(imageUrl, config);
       }
       
-      console.warn("Gemini no devolvió una imagen, usando desenfoque como respaldo");
+      console.warn("Gemini no devolvió una imagen en la respuesta, usando respaldo.");
       return processBlurFallback(file, config);
     } catch (error: any) {
-      console.error("Error en relleno generativo:", error);
-      
-      // Check for quota error or specific Gemini errors
-      const errorMsg = error.message || JSON.stringify(error);
-      if (errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("quota")) {
-        setErrorMsg("Límite de cuota IA alcanzado. Por favor, usa menos imágenes o espera unos minutos.");
-      }
-      
+      console.error("Error en flujo Gemini Solo:", error);
       return processBlurFallback(file, config);
     }
   };
@@ -570,7 +556,7 @@ export default function App() {
 
                   <div className="space-y-6">
                     <div className="flex justify-between text-[10px] font-bold text-brand-accent mb-2 uppercase tracking-widest">
-                       <span>{batchInsight || (status === 'processing' ? 'Analizando coherencia de texturas...' : 'Latencia del Motor: 4ms')}</span>
+                       <span>{batchInsight || (status === 'processing' ? 'Acelerando síntesis neuronal...' : 'Motor de Reescalado Listo')}</span>
                        <span>{globalProgress}%</span>
                     </div>
                     <div className="h-3 w-full bg-white/5 rounded-full overflow-hidden border border-white/5">
@@ -619,10 +605,10 @@ export default function App() {
                   value={settings.upscaleMethod}
                   onChange={(e) => setSettings({...settings, upscaleMethod: e.target.value as any})}
                 >
-                  <option className="bg-surface-950" value="generative-fill">Relleno Generativo Neuronal (Gemini)</option>
-                  <option className="bg-surface-950" value="hugging-face">Experimental (Hugging Face)</option>
-                  <option className="bg-surface-950" value="ai-blur">Desenfoque Generativo</option>
-                  <option className="bg-surface-950" value="solid-edge">Margen Sólido</option>
+                  <option className="bg-surface-950" value="generative-fill">Motor Gemini 2.5 (Extensión Nativa)</option>
+                  <option className="bg-surface-950" value="hugging-face">Experimental (Hugging Face SDXL)</option>
+                  <option className="bg-surface-950" value="ai-blur">Desenfoque Cinematográfico (Rápido)</option>
+                  <option className="bg-surface-950" value="solid-edge">Borde Sólido</option>
                 </select>
               </div>
             </div>
